@@ -168,11 +168,13 @@ impl From<&ImageAddressModeType> for ImageAddressMode {
 impl DynamicAsset for StandardDynamicAsset {
     fn load(&self, asset_server: &AssetServer) -> Vec<UntypedHandle> {
         match self {
-            StandardDynamicAsset::File { path } => vec![asset_server.load_untyped(path).untyped()],
+            StandardDynamicAsset::File { path } => {
+                vec![asset_server.load_builder().load_untyped(path).untyped()]
+            }
             StandardDynamicAsset::Folder { path } => vec![asset_server.load_folder(path).untyped()],
             StandardDynamicAsset::Files { paths } => paths
                 .iter()
-                .map(|path| asset_server.load_untyped(path).untyped())
+                .map(|path| asset_server.load_builder().load_untyped(path).untyped())
                 .collect(),
             #[cfg(any(feature = "3d", feature = "2d"))]
             StandardDynamicAsset::Image { path, .. } => {
@@ -208,11 +210,11 @@ impl DynamicAsset for StandardDynamicAsset {
             } => {
                 let mut system_state =
                     SystemState::<(ResMut<Assets<Image>>, Res<AssetServer>)>::new(world);
-                let (mut images, asset_server) = system_state.get_mut(world);
+                let (mut images, asset_server) = system_state.get_mut(world)?;
                 let mut handle = asset_server.load(path);
                 Self::update_image_sampler(&mut handle, &mut images, sampler, address_mode);
                 if let Some(layers) = array_texture_layers {
-                    let image = images
+                    let mut image = images
                         .get_mut(&handle)
                         .expect("Failed to find loaded image");
                     let _ = image.reinterpret_stacked_2d_as_array(*layers);
@@ -224,7 +226,7 @@ impl DynamicAsset for StandardDynamicAsset {
             StandardDynamicAsset::StandardMaterial { path } => {
                 let mut system_state =
                     SystemState::<(ResMut<Assets<StandardMaterial>>, Res<AssetServer>)>::new(world);
-                let (mut materials, asset_server) = system_state.get_mut(world);
+                let (mut materials, asset_server) = system_state.get_mut(world)?;
                 let handle = materials
                     .add(StandardMaterial::from(
                         asset_server.get_handle::<Image>(path).unwrap(),
@@ -262,7 +264,7 @@ impl DynamicAsset for StandardDynamicAsset {
             StandardDynamicAsset::Folder { path } => {
                 let mut system_state =
                     SystemState::<(Res<Assets<LoadedFolder>>, Res<AssetServer>)>::new(world);
-                let (folders, asset_server) = system_state.get(world);
+                let (folders, asset_server) = system_state.get(world)?;
                 Ok(DynamicAssetType::Collection(
                     folders
                         .get(&asset_server.get_handle(path).unwrap())
@@ -298,7 +300,7 @@ impl StandardDynamicAsset {
         sampler_type: &ImageSamplerType,
         address_mode: &ImageAddressModeType,
     ) {
-        let image = images.get_mut(&*handle).unwrap();
+        let mut image = images.get_mut(&*handle).unwrap();
         let configured_descriptor = ImageSamplerDescriptor {
             address_mode_u: address_mode.into(),
             address_mode_v: address_mode.into(),
@@ -317,6 +319,7 @@ impl StandardDynamicAsset {
         if is_different_sampler {
             let mut cloned_image = image.clone();
             cloned_image.sampler = ImageSampler::Descriptor(configured_descriptor);
+            drop(image);
             *handle = images.add(cloned_image);
         } else {
             image.sampler = ImageSampler::Descriptor(configured_descriptor);
@@ -333,6 +336,8 @@ pub struct RegisterStandardDynamicAsset<K: Into<String> + Sync + Send + 'static>
 }
 
 impl<K: Into<String> + Sync + Send + 'static> Command for RegisterStandardDynamicAsset<K> {
+    type Out = ();
+
     fn apply(self, world: &mut World) {
         let mut dynamic_assets = world.resource_mut::<DynamicAssets>();
         dynamic_assets.register_asset(self.key, Box::new(self.asset));
